@@ -15,8 +15,9 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 0
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "SecurityLayer" -Value 0 -Type DWord
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "fAllowRemoteConnections" -Value 1 -Type DWord
 
-          # 新建专用账户，不动 runneradmin
           net user rdpuser "Newera@2625" /add
           net localgroup "Remote Desktop Users" rdpuser /add
           net localgroup "Administrators" rdpuser /add
@@ -93,9 +94,72 @@ jobs:
           Write-Output "======================================================"
           Write-Output ""
 
-          Write-Output "===== KEEP ALIVE START (5h) ====="
+          # ================= 诊断 =================
+          Write-Output "===== RDP DIAG START ====="
+          Write-Output "--- 3389 listening ---"
+          netstat -ano | findstr "3389"
+          Write-Output "--- 80 listening ---"
+          netstat -ano | findstr ":80 "
+          Write-Output "--- RDP reg keys ---"
+          Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' | Select-Object UserAuthentication, SecurityLayer, fAllowRemoteConnections, PortNumber
+          Write-Output "--- rdpuser ---"
+          net user rdpuser
+          Write-Output "--- Remote Desktop Users group ---"
+          net localgroup "Remote Desktop Users"
+          Write-Output "--- Myrtille dirs ---"
+          Get-ChildItem "C:\Program Files\Myrtille" -ErrorAction SilentlyContinue | Select-Object Name, Length
+          Get-ChildItem "C:\Program Files (x86)\Myrtille" -ErrorAction SilentlyContinue | Select-Object Name, Length
+          Write-Output "--- Myrtille logs (last 50 lines) ---"
+          $logFiles = @()
+          $logFiles += Get-ChildItem "C:\Program Files\Myrtille" -Recurse -Include "*.log","*log*.txt" -ErrorAction SilentlyContinue
+          $logFiles += Get-ChildItem "C:\Program Files (x86)\Myrtille" -Recurse -Include "*.log","*log*.txt" -ErrorAction SilentlyContinue
+          $logFiles += Get-ChildItem "$env:ProgramData\Myrtille" -Recurse -Include "*.log" -ErrorAction SilentlyContinue
+          if ($logFiles.Count -eq 0) {
+            Write-Output "(no log files found)"
+          } else {
+            foreach ($lf in $logFiles) {
+              Write-Output ">>> $($lf.FullName) <<<"
+              Get-Content $lf.FullName -Tail 50 -ErrorAction SilentlyContinue
+            }
+          }
+          Write-Output "--- IIS sites ---"
+          Get-WebSite -ErrorAction SilentlyContinue | Select-Object Name, State, PhysicalPath, Bindings
+          Write-Output "--- IIS app pools ---"
+          Get-IISAppPool -ErrorAction SilentlyContinue | Select-Object Name, State, ProcessModel
+          Write-Output "===== RDP DIAG END ====="
+
+          # ================= 实时日志 + 保活 =================
+          Write-Output "===== KEEP ALIVE START (5h, live log every 60s) ====="
           $loopDeadline = (Get-Date).AddHours(5)
+          $tick = 0
           while ((Get-Date) -lt $loopDeadline) {
+            $tick++
+            Write-Output ""
+            Write-Output "----- live tick #$tick  $(Get-Date -Format 'HH:mm:ss') -----"
+            Write-Output "[3389]"
+            (netstat -ano | findstr "3389") | ForEach-Object { Write-Output "  $_" }
+            Write-Output "[80]"
+            (netstat -ano | findstr ":80 ") | ForEach-Object { Write-Output "  $_" }
+            Write-Output "[6080]"
+            (netstat -ano | findstr "6080") | ForEach-Object { Write-Output "  $_" }
+
+            $newLogs = @()
+            $newLogs += Get-ChildItem "C:\Program Files\Myrtille" -Recurse -Include "*.log" -ErrorAction SilentlyContinue
+            $newLogs += Get-ChildItem "C:\Program Files (x86)\Myrtille" -Recurse -Include "*.log" -ErrorAction SilentlyContinue
+            $newLogs += Get-ChildItem "$env:ProgramData\Myrtille" -Recurse -Include "*.log" -ErrorAction SilentlyContinue
+            if ($newLogs.Count -gt 0) {
+              $latest = $newLogs | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+              Write-Output "[myrtille log] $($latest.FullName) (mtime: $($latest.LastWriteTime))"
+              Get-Content $latest.FullName -Tail 20 -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "  $_" }
+            } else {
+              Write-Output "[myrtille log] (none found)"
+            }
+
+            if (Test-Path $errLog) {
+              Write-Output "[cf-err tail]"
+              Get-Content $errLog -Tail 5 -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "  $_" }
+            }
+
             Start-Sleep -Seconds 60
           }
           Write-Output "===== KEEP ALIVE END ====="
