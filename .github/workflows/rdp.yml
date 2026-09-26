@@ -1,0 +1,81 @@
+name: Windows Web RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  myrtille-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - name: 1. Enable RDP
+        shell: powershell
+        run: |
+          Write-Output "===== enable-rdp START ====="
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 0
+          net user runneradmin newera2625
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin" -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Administrators" -Member "runneradmin" -ErrorAction SilentlyContinue
+          Write-Output "===== enable-rdp END ====="
+
+      - name: 2. Install IIS & Prerequisites
+        shell: powershell
+        run: |
+          Write-Output "===== install-iis START ====="
+          Get-WindowsFeature -Name NET-*, Web-* | Where-Object { $_.Name -notmatch "Ftp" } | Install-WindowsFeature -ErrorAction SilentlyContinue
+          Set-Service -Name Spooler -StartupType Automatic -ErrorAction SilentlyContinue
+          Start-Service -Name Spooler -ErrorAction SilentlyContinue
+          Write-Output "===== install-iis END ====="
+
+      - name: 3. Install Myrtille
+        shell: powershell
+        run: |
+          Write-Output "===== install-myrtille START ====="
+          $url = "https://github.com/cedrozor/myrtille/releases/download/2.8.1/Myrtille_2.8.1_x86_x64_Setup.msi"
+          $msi = "$env:TEMP\Myrtille.msi"
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait
+          Write-Output "===== install-myrtille END ====="
+
+      - name: 4. Start Cloudflare Tunnel & Show Info
+        shell: powershell
+        run: |
+          Write-Output "===== tunnel START ====="
+          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "cloudflared.exe"
+          $workDir = (Get-Location).Path
+          $outLog = "$workDir\cf-out.log"
+          $errLog = "$workDir\cf-err.log"
+          Start-Process -FilePath "$workDir\cloudflared.exe" -ArgumentList "tunnel --url http://localhost:80 --no-autoupdate" -RedirectStandardOutput $outLog -RedirectStandardError $errLog -NoNewWindow
+          $url = ""
+          for ($i = 0; $i -lt 24; $i++) {
+            Start-Sleep -Seconds 5
+            foreach ($lf in @($outLog, $errLog)) {
+              if ((Test-Path $lf) -and ((Get-Item $lf).Length -gt 0)) {
+                $logText = Get-Content $lf -Raw -ErrorAction SilentlyContinue
+                if ($logText) {
+                  $m = [regex]::Match($logText, 'https://[a-z0-9-]+\.trycloudflare\.com')
+                  if ($m.Success) { $url = $m.Value; break }
+                }
+              }
+            }
+            if ($url) { break }
+          }
+
+          Write-Output ""
+          Write-Output "======================================================"
+          Write-Output "              WINDOWS WEB RDP READY"
+          Write-Output "======================================================"
+          Write-Output "  URL      : $url/Myrtille"
+          Write-Output "  Username : runneradmin"
+          Write-Output "  Password : newera2625"
+          Write-Output "======================================================"
+          Write-Output ""
+
+          Write-Output "===== KEEP ALIVE START (5h) ====="
+          $loopDeadline = (Get-Date).AddHours(5)
+          while ((Get-Date) -lt $loopDeadline) {
+            Start-Sleep -Seconds 60
+          }
+          Write-Output "===== KEEP ALIVE END ====="
