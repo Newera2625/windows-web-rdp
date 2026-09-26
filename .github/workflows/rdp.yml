@@ -8,17 +8,22 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
-      - name: 1. Enable RDP
+      - name: 1. Enable RDP & Create User
         shell: powershell
         run: |
           Write-Output "===== enable-rdp START ====="
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 0
-          net user runneradmin Newera@2625
-          if ($LASTEXITCODE -ne 0) { throw "set password failed" }
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin" -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Administrators" -Member "runneradmin" -ErrorAction SilentlyContinue
+
+          # 新建专用账户，不动 runneradmin
+          net user rdpuser "Newera@2625" /add
+          net localgroup "Remote Desktop Users" rdpuser /add
+          net localgroup "Administrators" rdpuser /add
+          if ($LASTEXITCODE -ne 0) { throw "create user failed" }
+
+          Write-Output "rdpuser created:"
+          net user rdpuser
           Write-Output "===== enable-rdp END ====="
 
       - name: 2. Install IIS & Prerequisites
@@ -83,7 +88,7 @@ jobs:
           Write-Output "              WINDOWS WEB RDP READY"
           Write-Output "======================================================"
           Write-Output "  URL      : $url/Myrtille"
-          Write-Output "  Username : runneradmin"
+          Write-Output "  Username : rdpuser"
           Write-Output "  Password : Newera@2625"
           Write-Output "======================================================"
           Write-Output ""
