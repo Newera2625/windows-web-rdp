@@ -15,7 +15,8 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 0
-          net user runneradmin newera2625
+          net user runneradmin Newera@2625
+          if ($LASTEXITCODE -ne 0) { throw "set password failed" }
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "runneradmin" -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Administrators" -Member "runneradmin" -ErrorAction SilentlyContinue
           Write-Output "===== enable-rdp END ====="
@@ -69,7 +70,7 @@ jobs:
           Write-Output "======================================================"
           Write-Output "  URL      : $url/Myrtille"
           Write-Output "  Username : runneradmin"
-          Write-Output "  Password : newera2625"
+          Write-Output "  Password : Newera@2625"
           Write-Output "======================================================"
           Write-Output ""
 
