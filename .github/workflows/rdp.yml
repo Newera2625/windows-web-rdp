@@ -34,9 +34,23 @@ jobs:
         shell: powershell
         run: |
           Write-Output "===== install-myrtille START ====="
-          $url = "https://github.com/cedrozor/myrtille/releases/download/2.8.1/Myrtille_2.8.1_x86_x64_Setup.msi"
           $msi = "$env:TEMP\Myrtille.msi"
-          Invoke-WebRequest -Uri $url -OutFile $msi
+          $urls = @(
+            "https://github.com/myrtille-rdp/myrtille/releases/download/v2.9.2/Myrtille_2.9.2_x86_x64_Setup.msi",
+            "https://gh-proxy.org/https://github.com/myrtille-rdp/myrtille/releases/download/v2.9.2/Myrtille_2.9.2_x86_x64_Setup.msi"
+          )
+          $ok = $false
+          foreach ($u in $urls) {
+            for ($i = 1; $i -le 3; $i++) {
+              Write-Output "try: $u (attempt $i)"
+              curl.exe -L --retry 2 --retry-delay 5 -o $msi $u
+              if ((Test-Path $msi) -and ((Get-Item $msi).Length -gt 1MB)) { $ok = $true; break }
+              Start-Sleep -Seconds 5
+            }
+            if ($ok) { break }
+          }
+          if (-not $ok) { throw "myrtille download failed" }
+          Write-Output "downloaded: $((Get-Item $msi).Length) bytes"
           Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait
           Write-Output "===== install-myrtille END ====="
 
