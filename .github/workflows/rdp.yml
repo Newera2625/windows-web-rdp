@@ -13,10 +13,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Continue"
           Write-Output "########## STEP 1: CREATE USER ##########"
-          Write-Output "[cmd] net user vncuser Newera@2625 /add"
           net user vncuser "Newera@2625" /add
           Write-Output "[exit=$LASTEXITCODE]"
-          Write-Output "[cmd] net localgroup Administrators vncuser /add"
           net localgroup "Administrators" vncuser /add
           Write-Output "[exit=$LASTEXITCODE]"
           net user vncuser
@@ -44,29 +42,36 @@ jobs:
           }
           if (-not $ok) { throw "tightvnc download failed" }
 
-          Write-Output "[cmd] msiexec silent install with password"
           $args = "/i `"$msi`" /qn /norestart ADDLOCAL=Server SET_USEVNCAUTHENTICATION=1 VALUE_OF_USEVNCAUTHENTICATION=1 SET_PASSWORD=1 VALUE_OF_PASSWORD=Newera@2625 SET_USECONTROLAUTHENTICATION=1 VALUE_OF_USECONTROLAUTHENTICATION=1 SET_CONTROLPASSWORD=1 VALUE_OF_CONTROLPASSWORD=Newera@2625"
-          $t0 = Get-Date
           Start-Process msiexec.exe -ArgumentList $args -Wait
-          $dt = (Get-Date) - $t0
-          Write-Output "[ok] install took $($dt.TotalSeconds)s"
+          Write-Output "[ok] install done"
 
-          Write-Output "----- install dir -----"
-          foreach ($p in @("C:\Program Files\TightVNC", "C:\Program Files (x86)\TightVNC")) {
-            if (Test-Path $p) {
-              Write-Output "[found] $p"
-              Get-ChildItem $p | Select-Object Name | ForEach-Object { Write-Output "    $($_.Name)" }
-            } else {
-              Write-Output "[not found] $p"
-            }
-          }
-
-          Write-Output "----- service -----"
           Get-Service | Where-Object { $_.Name -like "*tvn*" -or $_.Name -like "*vnc*" } | Select-Object Name, Status, StartType | Format-Table | Out-String | Write-Output
-
-          Write-Output "----- netstat 5900 -----"
           netstat -ano | findstr "5900"
           Write-Output "########## STEP 2 DONE ##########"
+
+      - name: 2.5 Enable TightVNC loopback
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Continue"
+          Write-Output "########## STEP 2.5: ENABLE LOOPBACK ##########"
+          $key = "HKLM:\Software\TightVNC\Server"
+          if (-not (Test-Path $key)) {
+            Write-Output "[warn] $key not found, creating"
+            New-Item -Path $key -Force | Out-Null
+          }
+          Set-ItemProperty -Path $key -Name "AllowLoopback" -Value 1 -Type DWord
+          Set-ItemProperty -Path $key -Name "LoopbackOnly" -Value 0 -Type DWord
+          Write-Output "[ok] set AllowLoopback=1 LoopbackOnly=0"
+          Get-ItemProperty -Path $key | Select-Object AllowLoopback, LoopbackOnly | Format-List | Out-String | Write-Output
+
+          Get-Service | Where-Object { $_.Name -like "*tvn*" -or $_.Name -like "*vnc*" } | ForEach-Object {
+            Write-Output "  restarting $($_.Name)"
+            Restart-Service $_.Name -Force -ErrorAction SilentlyContinue
+          }
+          Start-Sleep -Seconds 5
+          netstat -ano | findstr "5900"
+          Write-Output "########## STEP 2.5 DONE ##########"
 
       - name: 3. Install Python & websockify + noVNC
         shell: powershell
@@ -74,10 +79,7 @@ jobs:
           $ErrorActionPreference = "Continue"
           Write-Output "########## STEP 3: PYTHON + NOVNC ##########"
           choco install python -y --no-progress
-          Write-Output "[exit=$LASTEXITCODE]"
           python -m pip install websockify
-          Write-Output "[exit=$LASTEXITCODE]"
-
           $workDir = (Get-Location).Path
           $novncDir = "$workDir\novnc"
           New-Item -ItemType Directory -Path $novncDir -Force | Out-Null
@@ -98,7 +100,6 @@ jobs:
           $novncDir = "$workDir\novnc"
           Start-Process -FilePath $pythonPath -ArgumentList "-m websockify 6080 localhost:5900 --web $novncDir" -WorkingDirectory $workDir -WindowStyle Hidden
           Start-Sleep -Seconds 8
-          Write-Output "----- netstat 6080 -----"
           netstat -ano | findstr "6080"
           Write-Output "########## STEP 4 DONE ##########"
 
@@ -143,8 +144,8 @@ jobs:
           netstat -ano | findstr "6080"
           Write-Output "--- vnc service ---"
           Get-Service | Where-Object { $_.Name -like "*tvn*" -or $_.Name -like "*vnc*" } | Select-Object Name, Status | Format-Table | Out-String | Write-Output
-          Write-Output "--- vnc proc ---"
-          Get-Process | Where-Object { $_.Name -like "*vnc*" -or $_.Name -like "*tvn*" } | Select-Object Name, Id | Format-Table | Out-String | Write-Output
+          Write-Output "--- reg ---"
+          Get-ItemProperty "HKLM:\Software\TightVNC\Server" -ErrorAction SilentlyContinue | Select-Object AllowLoopback, LoopbackOnly | Format-List | Out-String | Write-Output
           Write-Output "########## DIAG END ##########"
 
           Write-Output "########## KEEP ALIVE START (5h) ##########"
@@ -153,13 +154,20 @@ jobs:
           while ((Get-Date) -lt $loopDeadline) {
             $tick++
             Write-Output ""
-            Write-Output "----- tick #$tick  $(Get-Date -Format 'HH:mm:ss') -----"
+            Write-Output "===== tick #$tick  $(Get-Date -Format 'HH:mm:ss') ====="
             Write-Output "[5900]"
             (netstat -ano | findstr "5900") | ForEach-Object { Write-Output "  $_" }
             Write-Output "[6080]"
             (netstat -ano | findstr "6080") | ForEach-Object { Write-Output "  $_" }
+            Write-Output "[vnc service]"
+            (Get-Service | Where-Object { $_.Name -like "*tvn*" -or $_.Name -like "*vnc*" } | Select-Object Name, Status) | ForEach-Object { Write-Output "  $($_.Name)  $($_.Status)" }
             Write-Output "[vnc proc]"
             (Get-Process | Where-Object { $_.Name -like "*vnc*" -or $_.Name -like "*tvn*" } | Select-Object Name, Id) | ForEach-Object { Write-Output "  $($_.Name) $($_.Id)" }
+            Write-Output "[reg]"
+            $r = Get-ItemProperty "HKLM:\Software\TightVNC\Server" -ErrorAction SilentlyContinue
+            Write-Output "  AllowLoopback=$($r.AllowLoopback) LoopbackOnly=$($r.LoopbackOnly)"
+            Write-Output "[cf-err tail]"
+            if (Test-Path $errLog) { Get-Content $errLog -Tail 3 -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "  $_" } }
             Start-Sleep -Seconds 60
           }
           Write-Output "########## KEEP ALIVE END ##########"
