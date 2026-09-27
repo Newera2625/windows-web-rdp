@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  ultravnc:
+  tightvnc:
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
@@ -19,155 +19,99 @@ jobs:
           Write-Output "[cmd] net localgroup Administrators vncuser /add"
           net localgroup "Administrators" vncuser /add
           Write-Output "[exit=$LASTEXITCODE]"
-          Write-Output "[cmd] net user vncuser"
           net user vncuser
-          Write-Output "[exit=$LASTEXITCODE]"
           Write-Output "########## STEP 1 DONE ##########"
 
-      - name: 2. Install UltraVNC
+      - name: 2. Install TightVNC (64-bit)
         shell: powershell
         run: |
           $ErrorActionPreference = "Continue"
-          Write-Output "########## STEP 2: INSTALL ULTRAVNC ##########"
-          $exe = "$env:TEMP\UltraVNC.exe"
-          $dl = "https://downloads.sourceforge.net/project/ultravnc/UltraVNC%20Installer/UltraVNC_1_4_62_Setup.exe"
-          Write-Output "[info] download url = $dl"
-          Write-Output "[info] target file  = $exe"
+          Write-Output "########## STEP 2: INSTALL TIGHTVNC ##########"
+          $msi = "$env:TEMP\tightvnc.msi"
+          $dl = "https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi"
+          Write-Output "[info] url = $dl"
           $ok = $false
           for ($i = 1; $i -le 3; $i++) {
-            Write-Output "----- download attempt $i -----"
-            Write-Output "[cmd] curl.exe -L --retry 2 --retry-delay 5 -o $exe $dl"
-            curl.exe -L --retry 2 --retry-delay 5 -o $exe $dl
+            Write-Output "----- attempt $i -----"
+            curl.exe -L --retry 2 --retry-delay 5 -o $msi $dl
             Write-Output "[exit=$LASTEXITCODE]"
-            if ((Test-Path $exe) -and ((Get-Item $exe).Length -gt 1MB)) {
+            if ((Test-Path $msi) -and ((Get-Item $msi).Length -gt 1MB)) {
               $ok = $true
-              Write-Output "[ok] file size = $((Get-Item $exe).Length) bytes"
+              Write-Output "[ok] size = $((Get-Item $msi).Length) bytes"
               break
-            } else {
-              Write-Output "[warn] file missing or too small, retry..."
-              Start-Sleep -Seconds 5
             }
+            Start-Sleep -Seconds 5
           }
-          if (-not $ok) { throw "ultravnc download failed" }
+          if (-not $ok) { throw "tightvnc download failed" }
 
-          Write-Output "[cmd] Start-Process $exe -ArgumentList '/verysilent /norestart' -Wait"
+          Write-Output "[cmd] msiexec silent install with password"
+          $args = "/i `"$msi`" /qn /norestart ADDLOCAL=Server SET_USEVNCAUTHENTICATION=1 VALUE_OF_USEVNCAUTHENTICATION=1 SET_PASSWORD=1 VALUE_OF_PASSWORD=Newera@2625 SET_USECONTROLAUTHENTICATION=1 VALUE_OF_USECONTROLAUTHENTICATION=1 SET_CONTROLPASSWORD=1 VALUE_OF_CONTROLPASSWORD=Newera@2625"
           $t0 = Get-Date
-          Start-Process $exe -ArgumentList "/verysilent /norestart" -Wait
+          Start-Process msiexec.exe -ArgumentList $args -Wait
           $dt = (Get-Date) - $t0
-          Write-Output "[ok] installer finished, took $($dt.TotalSeconds)s"
+          Write-Output "[ok] install took $($dt.TotalSeconds)s"
 
-          Write-Output "----- check install dirs -----"
-          foreach ($p in @("C:\Program Files\uvnc bvba\UltraVNC", "C:\Program Files (x86)\uvnc bvba\UltraVNC")) {
+          Write-Output "----- install dir -----"
+          foreach ($p in @("C:\Program Files\TightVNC", "C:\Program Files (x86)\TightVNC")) {
             if (Test-Path $p) {
               Write-Output "[found] $p"
-              Get-ChildItem $p | Select-Object Name, Length | ForEach-Object { Write-Output "    $($_.Name)  $($_.Length)" }
+              Get-ChildItem $p | Select-Object Name | ForEach-Object { Write-Output "    $($_.Name)" }
             } else {
               Write-Output "[not found] $p"
             }
           }
-          Write-Output "########## STEP 2 DONE ##########"
 
-      - name: 3. Configure UltraVNC
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Continue"
-          Write-Output "########## STEP 3: CONFIGURE ULTRAVNC ##########"
-          $vncDir = "C:\Program Files\uvnc bvba\UltraVNC"
-          if (-not (Test-Path $vncDir)) { $vncDir = "C:\Program Files (x86)\uvnc bvba\UltraVNC" }
-          Write-Output "[info] vncDir = $vncDir"
-          if (-not (Test-Path $vncDir)) { throw "UltraVNC install dir not found" }
-
-          Write-Output "----- vncDir contents -----"
-          Get-ChildItem $vncDir | Select-Object Name | ForEach-Object { Write-Output "    $($_.Name)" }
-
-          Write-Output "[cmd] setpasswd.exe Newera@2625 Newera@2625"
-          $sp = Join-Path $vncDir "setpasswd.exe"
-          if (Test-Path $sp) {
-            & $sp "Newera@2625" "Newera@2625"
-            Write-Output "[exit=$LASTEXITCODE]"
-          } else {
-            Write-Output "[warn] setpasswd.exe not found, skip"
-          }
-
-          Write-Output "[cmd] winvnc.exe -install"
-          & (Join-Path $vncDir "winvnc.exe") -install
-          Write-Output "[exit=$LASTEXITCODE]"
-          Start-Sleep -Seconds 3
-
-          Write-Output "[cmd] winvnc.exe -start"
-          & (Join-Path $vncDir "winvnc.exe") -start
-          Write-Output "[exit=$LASTEXITCODE]"
-          Start-Sleep -Seconds 3
+          Write-Output "----- service -----"
+          Get-Service | Where-Object { $_.Name -like "*tvn*" -or $_.Name -like "*vnc*" } | Select-Object Name, Status, StartType | Format-Table | Out-String | Write-Output
 
           Write-Output "----- netstat 5900 -----"
           netstat -ano | findstr "5900"
+          Write-Output "########## STEP 2 DONE ##########"
 
-          Write-Output "----- service status -----"
-          Get-Service | Where-Object { $_.Name -like "*vnc*" } | Select-Object Name, Status, StartType | ForEach-Object { Write-Output "    $($_.Name)  $($_.Status)  $($_.StartType)" }
-          Write-Output "########## STEP 3 DONE ##########"
-
-      - name: 4. Install Python & websockify + noVNC
+      - name: 3. Install Python & websockify + noVNC
         shell: powershell
         run: |
           $ErrorActionPreference = "Continue"
-          Write-Output "########## STEP 4: INSTALL PYTHON + NOVNC ##########"
-          Write-Output "[cmd] choco install python -y --no-progress"
+          Write-Output "########## STEP 3: PYTHON + NOVNC ##########"
           choco install python -y --no-progress
           Write-Output "[exit=$LASTEXITCODE]"
-          Write-Output "[cmd] python -m pip install websockify"
           python -m pip install websockify
           Write-Output "[exit=$LASTEXITCODE]"
 
           $workDir = (Get-Location).Path
           $novncDir = "$workDir\novnc"
-          Write-Output "[info] novncDir = $novncDir"
           New-Item -ItemType Directory -Path $novncDir -Force | Out-Null
-
           $zip = "$workDir\novnc.zip"
-          Write-Output "[cmd] Invoke-WebRequest noVNC master.zip"
           Invoke-WebRequest -Uri "https://github.com/novnc/noVNC/archive/refs/heads/master.zip" -OutFile $zip
-          Write-Output "[ok] zip size = $((Get-Item $zip).Length) bytes"
-
-          Write-Output "[cmd] Expand-Archive"
           Expand-Archive -Path $zip -DestinationPath $workDir -Force
-          Write-Output "[cmd] Copy-Item noVNC-master -> novnc"
           Copy-Item -Path "$workDir\noVNC-master\*" -Destination $novncDir -Recurse -Force
-          Write-Output "[ok] novnc contents:"
-          Get-ChildItem $novncDir | Select-Object Name | ForEach-Object { Write-Output "    $($_.Name)" }
-          Write-Output "########## STEP 4 DONE ##########"
+          Write-Output "[ok] noVNC ready"
+          Write-Output "########## STEP 3 DONE ##########"
 
-      - name: 5. Start websockify
+      - name: 4. Start websockify
         shell: powershell
         run: |
           $ErrorActionPreference = "Continue"
-          Write-Output "########## STEP 5: START WEBSOCKIFY ##########"
+          Write-Output "########## STEP 4: WEBSOCKIFY ##########"
           $pythonPath = (Get-Command python).Source
           $workDir = (Get-Location).Path
           $novncDir = "$workDir\novnc"
-          Write-Output "[info] python = $pythonPath"
-          Write-Output "[info] novnc  = $novncDir"
-          Write-Output "[cmd] websockify 6080 localhost:5900 --web $novncDir"
           Start-Process -FilePath $pythonPath -ArgumentList "-m websockify 6080 localhost:5900 --web $novncDir" -WorkingDirectory $workDir -WindowStyle Hidden
           Start-Sleep -Seconds 8
           Write-Output "----- netstat 6080 -----"
           netstat -ano | findstr "6080"
-          Write-Output "########## STEP 5 DONE ##########"
+          Write-Output "########## STEP 4 DONE ##########"
 
-      - name: 6. Start Cloudflare Tunnel & Show Info
+      - name: 5. Start Cloudflare Tunnel & Show Info
         shell: powershell
         run: |
           $ErrorActionPreference = "Continue"
-          Write-Output "########## STEP 6: CLOUDFLARE TUNNEL ##########"
-          Write-Output "[cmd] download cloudflared"
+          Write-Output "########## STEP 5: TUNNEL ##########"
           Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "cloudflared.exe"
-          Write-Output "[ok] cloudflared size = $((Get-Item cloudflared.exe).Length) bytes"
-
           $workDir = (Get-Location).Path
           $outLog = "$workDir\cf-out.log"
           $errLog = "$workDir\cf-err.log"
-          Write-Output "[cmd] cloudflared tunnel --url http://localhost:6080"
           Start-Process -FilePath "$workDir\cloudflared.exe" -ArgumentList "tunnel --url http://localhost:6080 --no-autoupdate" -RedirectStandardOutput $outLog -RedirectStandardError $errLog -NoNewWindow
-
           $url = ""
           for ($i = 0; $i -lt 24; $i++) {
             Start-Sleep -Seconds 5
@@ -192,16 +136,15 @@ jobs:
           Write-Output "======================================================"
           Write-Output ""
 
-          # 诊断
           Write-Output "########## DIAG START ##########"
           Write-Output "--- 5900 ---"
           netstat -ano | findstr "5900"
           Write-Output "--- 6080 ---"
           netstat -ano | findstr "6080"
           Write-Output "--- vnc service ---"
-          Get-Service | Where-Object { $_.Name -like "*vnc*" } | Select-Object Name, Status | Format-Table | Out-String | Write-Output
-          Write-Output "--- vnc processes ---"
-          Get-Process | Where-Object { $_.Name -like "*vnc*" } | Select-Object Name, Id | Format-Table | Out-String | Write-Output
+          Get-Service | Where-Object { $_.Name -like "*tvn*" -or $_.Name -like "*vnc*" } | Select-Object Name, Status | Format-Table | Out-String | Write-Output
+          Write-Output "--- vnc proc ---"
+          Get-Process | Where-Object { $_.Name -like "*vnc*" -or $_.Name -like "*tvn*" } | Select-Object Name, Id | Format-Table | Out-String | Write-Output
           Write-Output "########## DIAG END ##########"
 
           Write-Output "########## KEEP ALIVE START (5h) ##########"
@@ -216,7 +159,7 @@ jobs:
             Write-Output "[6080]"
             (netstat -ano | findstr "6080") | ForEach-Object { Write-Output "  $_" }
             Write-Output "[vnc proc]"
-            (Get-Process | Where-Object { $_.Name -like "*vnc*" } | Select-Object Name, Id) | ForEach-Object { Write-Output "  $($_.Name) $($_.Id)" }
+            (Get-Process | Where-Object { $_.Name -like "*vnc*" -or $_.Name -like "*tvn*" } | Select-Object Name, Id) | ForEach-Object { Write-Output "  $($_.Name) $($_.Id)" }
             Start-Sleep -Seconds 60
           }
           Write-Output "########## KEEP ALIVE END ##########"
