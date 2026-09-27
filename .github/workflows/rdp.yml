@@ -1,74 +1,173 @@
-name: Windows Web RDP
+name: Windows VNC
 
 on:
   workflow_dispatch:
 
 jobs:
-  myrtille-rdp:
+  ultravnc:
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
-      - name: 1. Enable RDP & Create User
+      - name: 1. Create User
         shell: powershell
         run: |
-          Write-Output "===== enable-rdp START ====="
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 0
-          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "SecurityLayer" -Value 0 -Type DWord
-          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "fAllowRemoteConnections" -Value 1 -Type DWord
+          $ErrorActionPreference = "Continue"
+          Write-Output "########## STEP 1: CREATE USER ##########"
+          Write-Output "[cmd] net user vncuser Newera@2625 /add"
+          net user vncuser "Newera@2625" /add
+          Write-Output "[exit=$LASTEXITCODE]"
+          Write-Output "[cmd] net localgroup Administrators vncuser /add"
+          net localgroup "Administrators" vncuser /add
+          Write-Output "[exit=$LASTEXITCODE]"
+          Write-Output "[cmd] net user vncuser"
+          net user vncuser
+          Write-Output "[exit=$LASTEXITCODE]"
+          Write-Output "########## STEP 1 DONE ##########"
 
-          net user rdpuser "Newera@2625" /add
-          net localgroup "Remote Desktop Users" rdpuser /add
-          net localgroup "Administrators" rdpuser /add
-          if ($LASTEXITCODE -ne 0) { throw "create user failed" }
-
-          Write-Output "rdpuser created:"
-          net user rdpuser
-          Write-Output "===== enable-rdp END ====="
-
-      - name: 2. Install IIS & Prerequisites
+      - name: 2. Install UltraVNC
         shell: powershell
         run: |
-          Write-Output "===== install-iis START ====="
-          Get-WindowsFeature -Name NET-*, Web-* | Where-Object { $_.Name -notmatch "Ftp" } | Install-WindowsFeature -ErrorAction SilentlyContinue
-          Set-Service -Name Spooler -StartupType Automatic -ErrorAction SilentlyContinue
-          Start-Service -Name Spooler -ErrorAction SilentlyContinue
-          Write-Output "===== install-iis END ====="
-
-      - name: 3. Install Myrtille
-        shell: powershell
-        run: |
-          Write-Output "===== install-myrtille START ====="
-          $msi = "$env:TEMP\Myrtille.msi"
-          $urls = @(
-            "https://github.com/myrtille-rdp/myrtille/releases/download/v2.9.2/Myrtille_2.9.2_x86_x64_Setup.msi",
-            "https://gh-proxy.org/https://github.com/myrtille-rdp/myrtille/releases/download/v2.9.2/Myrtille_2.9.2_x86_x64_Setup.msi"
-          )
+          $ErrorActionPreference = "Continue"
+          Write-Output "########## STEP 2: INSTALL ULTRAVNC ##########"
+          $exe = "$env:TEMP\UltraVNC.exe"
+          $dl = "https://downloads.sourceforge.net/project/ultravnc/UltraVNC%20Installer/UltraVNC_1_4_62_Setup.exe"
+          Write-Output "[info] download url = $dl"
+          Write-Output "[info] target file  = $exe"
           $ok = $false
-          foreach ($u in $urls) {
-            for ($i = 1; $i -le 3; $i++) {
-              Write-Output "try: $u (attempt $i)"
-              curl.exe -L --retry 2 --retry-delay 5 -o $msi $u
-              if ((Test-Path $msi) -and ((Get-Item $msi).Length -gt 1MB)) { $ok = $true; break }
+          for ($i = 1; $i -le 3; $i++) {
+            Write-Output "----- download attempt $i -----"
+            Write-Output "[cmd] curl.exe -L --retry 2 --retry-delay 5 -o $exe $dl"
+            curl.exe -L --retry 2 --retry-delay 5 -o $exe $dl
+            Write-Output "[exit=$LASTEXITCODE]"
+            if ((Test-Path $exe) -and ((Get-Item $exe).Length -gt 1MB)) {
+              $ok = $true
+              Write-Output "[ok] file size = $((Get-Item $exe).Length) bytes"
+              break
+            } else {
+              Write-Output "[warn] file missing or too small, retry..."
               Start-Sleep -Seconds 5
             }
-            if ($ok) { break }
           }
-          if (-not $ok) { throw "myrtille download failed" }
-          Write-Output "downloaded: $((Get-Item $msi).Length) bytes"
-          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait
-          Write-Output "===== install-myrtille END ====="
+          if (-not $ok) { throw "ultravnc download failed" }
 
-      - name: 4. Start Cloudflare Tunnel & Show Info
+          Write-Output "[cmd] Start-Process $exe -ArgumentList '/verysilent /norestart' -Wait"
+          $t0 = Get-Date
+          Start-Process $exe -ArgumentList "/verysilent /norestart" -Wait
+          $dt = (Get-Date) - $t0
+          Write-Output "[ok] installer finished, took $($dt.TotalSeconds)s"
+
+          Write-Output "----- check install dirs -----"
+          foreach ($p in @("C:\Program Files\uvnc bvba\UltraVNC", "C:\Program Files (x86)\uvnc bvba\UltraVNC")) {
+            if (Test-Path $p) {
+              Write-Output "[found] $p"
+              Get-ChildItem $p | Select-Object Name, Length | ForEach-Object { Write-Output "    $($_.Name)  $($_.Length)" }
+            } else {
+              Write-Output "[not found] $p"
+            }
+          }
+          Write-Output "########## STEP 2 DONE ##########"
+
+      - name: 3. Configure UltraVNC
         shell: powershell
         run: |
-          Write-Output "===== tunnel START ====="
+          $ErrorActionPreference = "Continue"
+          Write-Output "########## STEP 3: CONFIGURE ULTRAVNC ##########"
+          $vncDir = "C:\Program Files\uvnc bvba\UltraVNC"
+          if (-not (Test-Path $vncDir)) { $vncDir = "C:\Program Files (x86)\uvnc bvba\UltraVNC" }
+          Write-Output "[info] vncDir = $vncDir"
+          if (-not (Test-Path $vncDir)) { throw "UltraVNC install dir not found" }
+
+          Write-Output "----- vncDir contents -----"
+          Get-ChildItem $vncDir | Select-Object Name | ForEach-Object { Write-Output "    $($_.Name)" }
+
+          Write-Output "[cmd] setpasswd.exe Newera@2625 Newera@2625"
+          $sp = Join-Path $vncDir "setpasswd.exe"
+          if (Test-Path $sp) {
+            & $sp "Newera@2625" "Newera@2625"
+            Write-Output "[exit=$LASTEXITCODE]"
+          } else {
+            Write-Output "[warn] setpasswd.exe not found, skip"
+          }
+
+          Write-Output "[cmd] winvnc.exe -install"
+          & (Join-Path $vncDir "winvnc.exe") -install
+          Write-Output "[exit=$LASTEXITCODE]"
+          Start-Sleep -Seconds 3
+
+          Write-Output "[cmd] winvnc.exe -start"
+          & (Join-Path $vncDir "winvnc.exe") -start
+          Write-Output "[exit=$LASTEXITCODE]"
+          Start-Sleep -Seconds 3
+
+          Write-Output "----- netstat 5900 -----"
+          netstat -ano | findstr "5900"
+
+          Write-Output "----- service status -----"
+          Get-Service | Where-Object { $_.Name -like "*vnc*" } | Select-Object Name, Status, StartType | ForEach-Object { Write-Output "    $($_.Name)  $($_.Status)  $($_.StartType)" }
+          Write-Output "########## STEP 3 DONE ##########"
+
+      - name: 4. Install Python & websockify + noVNC
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Continue"
+          Write-Output "########## STEP 4: INSTALL PYTHON + NOVNC ##########"
+          Write-Output "[cmd] choco install python -y --no-progress"
+          choco install python -y --no-progress
+          Write-Output "[exit=$LASTEXITCODE]"
+          Write-Output "[cmd] python -m pip install websockify"
+          python -m pip install websockify
+          Write-Output "[exit=$LASTEXITCODE]"
+
+          $workDir = (Get-Location).Path
+          $novncDir = "$workDir\novnc"
+          Write-Output "[info] novncDir = $novncDir"
+          New-Item -ItemType Directory -Path $novncDir -Force | Out-Null
+
+          $zip = "$workDir\novnc.zip"
+          Write-Output "[cmd] Invoke-WebRequest noVNC master.zip"
+          Invoke-WebRequest -Uri "https://github.com/novnc/noVNC/archive/refs/heads/master.zip" -OutFile $zip
+          Write-Output "[ok] zip size = $((Get-Item $zip).Length) bytes"
+
+          Write-Output "[cmd] Expand-Archive"
+          Expand-Archive -Path $zip -DestinationPath $workDir -Force
+          Write-Output "[cmd] Copy-Item noVNC-master -> novnc"
+          Copy-Item -Path "$workDir\noVNC-master\*" -Destination $novncDir -Recurse -Force
+          Write-Output "[ok] novnc contents:"
+          Get-ChildItem $novncDir | Select-Object Name | ForEach-Object { Write-Output "    $($_.Name)" }
+          Write-Output "########## STEP 4 DONE ##########"
+
+      - name: 5. Start websockify
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Continue"
+          Write-Output "########## STEP 5: START WEBSOCKIFY ##########"
+          $pythonPath = (Get-Command python).Source
+          $workDir = (Get-Location).Path
+          $novncDir = "$workDir\novnc"
+          Write-Output "[info] python = $pythonPath"
+          Write-Output "[info] novnc  = $novncDir"
+          Write-Output "[cmd] websockify 6080 localhost:5900 --web $novncDir"
+          Start-Process -FilePath $pythonPath -ArgumentList "-m websockify 6080 localhost:5900 --web $novncDir" -WorkingDirectory $workDir -WindowStyle Hidden
+          Start-Sleep -Seconds 8
+          Write-Output "----- netstat 6080 -----"
+          netstat -ano | findstr "6080"
+          Write-Output "########## STEP 5 DONE ##########"
+
+      - name: 6. Start Cloudflare Tunnel & Show Info
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Continue"
+          Write-Output "########## STEP 6: CLOUDFLARE TUNNEL ##########"
+          Write-Output "[cmd] download cloudflared"
           Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "cloudflared.exe"
+          Write-Output "[ok] cloudflared size = $((Get-Item cloudflared.exe).Length) bytes"
+
           $workDir = (Get-Location).Path
           $outLog = "$workDir\cf-out.log"
           $errLog = "$workDir\cf-err.log"
-          Start-Process -FilePath "$workDir\cloudflared.exe" -ArgumentList "tunnel --url http://localhost:80 --no-autoupdate" -RedirectStandardOutput $outLog -RedirectStandardError $errLog -NoNewWindow
+          Write-Output "[cmd] cloudflared tunnel --url http://localhost:6080"
+          Start-Process -FilePath "$workDir\cloudflared.exe" -ArgumentList "tunnel --url http://localhost:6080 --no-autoupdate" -RedirectStandardOutput $outLog -RedirectStandardError $errLog -NoNewWindow
+
           $url = ""
           for ($i = 0; $i -lt 24; $i++) {
             Start-Sleep -Seconds 5
@@ -86,80 +185,38 @@ jobs:
 
           Write-Output ""
           Write-Output "======================================================"
-          Write-Output "              WINDOWS WEB RDP READY"
+          Write-Output "              WINDOWS VNC READY"
           Write-Output "======================================================"
-          Write-Output "  URL      : $url/Myrtille"
-          Write-Output "  Username : rdpuser"
+          Write-Output "  URL      : $url/vnc.html"
           Write-Output "  Password : Newera@2625"
           Write-Output "======================================================"
           Write-Output ""
 
-          # ================= 诊断 =================
-          Write-Output "===== RDP DIAG START ====="
-          Write-Output "--- 3389 listening ---"
-          netstat -ano | findstr "3389"
-          Write-Output "--- 80 listening ---"
-          netstat -ano | findstr ":80 "
-          Write-Output "--- RDP reg keys ---"
-          Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' | Select-Object UserAuthentication, SecurityLayer, fAllowRemoteConnections, PortNumber
-          Write-Output "--- rdpuser ---"
-          net user rdpuser
-          Write-Output "--- Remote Desktop Users group ---"
-          net localgroup "Remote Desktop Users"
-          Write-Output "--- Myrtille dirs ---"
-          Get-ChildItem "C:\Program Files\Myrtille" -ErrorAction SilentlyContinue | Select-Object Name, Length
-          Get-ChildItem "C:\Program Files (x86)\Myrtille" -ErrorAction SilentlyContinue | Select-Object Name, Length
-          Write-Output "--- Myrtille logs (last 50 lines) ---"
-          $logFiles = @()
-          $logFiles += Get-ChildItem "C:\Program Files\Myrtille" -Recurse -Include "*.log","*log*.txt" -ErrorAction SilentlyContinue
-          $logFiles += Get-ChildItem "C:\Program Files (x86)\Myrtille" -Recurse -Include "*.log","*log*.txt" -ErrorAction SilentlyContinue
-          $logFiles += Get-ChildItem "$env:ProgramData\Myrtille" -Recurse -Include "*.log" -ErrorAction SilentlyContinue
-          if ($logFiles.Count -eq 0) {
-            Write-Output "(no log files found)"
-          } else {
-            foreach ($lf in $logFiles) {
-              Write-Output ">>> $($lf.FullName) <<<"
-              Get-Content $lf.FullName -Tail 50 -ErrorAction SilentlyContinue
-            }
-          }
-          Write-Output "--- IIS sites ---"
-          Get-WebSite -ErrorAction SilentlyContinue | Select-Object Name, State, PhysicalPath, Bindings
-          Write-Output "--- IIS app pools ---"
-          Get-IISAppPool -ErrorAction SilentlyContinue | Select-Object Name, State, ProcessModel
-          Write-Output "===== RDP DIAG END ====="
+          # 诊断
+          Write-Output "########## DIAG START ##########"
+          Write-Output "--- 5900 ---"
+          netstat -ano | findstr "5900"
+          Write-Output "--- 6080 ---"
+          netstat -ano | findstr "6080"
+          Write-Output "--- vnc service ---"
+          Get-Service | Where-Object { $_.Name -like "*vnc*" } | Select-Object Name, Status | Format-Table | Out-String | Write-Output
+          Write-Output "--- vnc processes ---"
+          Get-Process | Where-Object { $_.Name -like "*vnc*" } | Select-Object Name, Id | Format-Table | Out-String | Write-Output
+          Write-Output "########## DIAG END ##########"
 
-          # ================= 实时日志 + 保活 =================
-          Write-Output "===== KEEP ALIVE START (5h, live log every 60s) ====="
+          Write-Output "########## KEEP ALIVE START (5h) ##########"
           $loopDeadline = (Get-Date).AddHours(5)
           $tick = 0
           while ((Get-Date) -lt $loopDeadline) {
             $tick++
             Write-Output ""
-            Write-Output "----- live tick #$tick  $(Get-Date -Format 'HH:mm:ss') -----"
-            Write-Output "[3389]"
-            (netstat -ano | findstr "3389") | ForEach-Object { Write-Output "  $_" }
-            Write-Output "[80]"
-            (netstat -ano | findstr ":80 ") | ForEach-Object { Write-Output "  $_" }
+            Write-Output "----- tick #$tick  $(Get-Date -Format 'HH:mm:ss') -----"
+            Write-Output "[5900]"
+            (netstat -ano | findstr "5900") | ForEach-Object { Write-Output "  $_" }
             Write-Output "[6080]"
             (netstat -ano | findstr "6080") | ForEach-Object { Write-Output "  $_" }
-
-            $newLogs = @()
-            $newLogs += Get-ChildItem "C:\Program Files\Myrtille" -Recurse -Include "*.log" -ErrorAction SilentlyContinue
-            $newLogs += Get-ChildItem "C:\Program Files (x86)\Myrtille" -Recurse -Include "*.log" -ErrorAction SilentlyContinue
-            $newLogs += Get-ChildItem "$env:ProgramData\Myrtille" -Recurse -Include "*.log" -ErrorAction SilentlyContinue
-            if ($newLogs.Count -gt 0) {
-              $latest = $newLogs | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-              Write-Output "[myrtille log] $($latest.FullName) (mtime: $($latest.LastWriteTime))"
-              Get-Content $latest.FullName -Tail 20 -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "  $_" }
-            } else {
-              Write-Output "[myrtille log] (none found)"
-            }
-
-            if (Test-Path $errLog) {
-              Write-Output "[cf-err tail]"
-              Get-Content $errLog -Tail 5 -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "  $_" }
-            }
-
+            Write-Output "[vnc proc]"
+            (Get-Process | Where-Object { $_.Name -like "*vnc*" } | Select-Object Name, Id) | ForEach-Object { Write-Output "  $($_.Name) $($_.Id)" }
             Start-Sleep -Seconds 60
           }
-          Write-Output "===== KEEP ALIVE END ====="
+          Write-Output "########## KEEP ALIVE END ##########"
